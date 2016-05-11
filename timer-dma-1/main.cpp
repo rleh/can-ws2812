@@ -54,6 +54,17 @@ static constexpr Timer2::Value compareValue1 = overflow * (900.0 / 1250.0);
 
 void ledsToTimerValues(rgb_t* leds, uint16_t* timerValues, uint32_t numLeds);
 
+
+uint32_t isr() {
+	return DMA1->ISR;
+}
+uint32_t cndtr() {
+	return DMA1_Channel3->CNDTR;
+}
+uint32_t tim2_ccr2() {
+	return TIM2->CCR2;
+}
+
 int
 main()
 {
@@ -89,46 +100,59 @@ main()
 	Timer2::setPrescaler(prescaler);
 	Timer2::configureOutputChannel(2, Timer2::OutputCompareMode::Pwm, 42);
 	Timer2::enableDmaRequest(Timer2::DmaRequestEnable::CaptureCompare2);
+	TIM2->CR1 |= TIM_CR1_ARPE; //  Auto-reload preload enable
+	TIM2->CCMR1 |= TIM_CCMR1_OC1PE; // Output compare 1 preload enable
 	Timer2::applyAndReset();
-	//Timer2::start();
 
+
+	XPCC_LOG_INFO << "TIM2->CR1=" << ((uint32_t)TIM2->CR1) << xpcc::endl;
+	XPCC_LOG_INFO << "TIM2->CCMR1=" << ((uint32_t)TIM2->CCMR1) << xpcc::endl;
+
+	//Timer2::start();
 
 	// enable and setup DMA
 	Dma1::enable();
 	Dma1::Stream3::stop();
-	Dma1::Stream3::configure(numDmaTransactions, Dma1::Stream3::Priority::High, Dma1::Stream3::CircularMode::Enabled);
-	Dma1::Stream3::setMemorySource(static_cast<uint16_t*>(timerValues), Dma1::Stream3::MemoryIncrementMode::Increment);
-	Dma1::Stream3::setPeripheralDestination(reinterpret_cast<uint16_t*>(const_cast<uint32_t*>(&(TIM2->CCR2))), Dma1::Stream3::PeripheralIncrementMode::Fixed);
-	//Dma1::Stream3::setPeripheralDestination(static_cast<uint16_t*>(&TIM17->CCR1), Dma1::Stream3::MemoryIncrementMode::Fixed);
-	//Dma1::Stream3::start();
-
-	ledsToTimerValues(leds, timerValues, numLeds);
-
-	XPCC_LOG_INFO << "numDmaTransactions=" << numDmaTransactions << xpcc::endl;
-	for (uint16_t i = 0; i < numDmaTransactions; i++) {
-		XPCC_LOG_INFO << "compareValue=" << timerValues[i] << xpcc::endl;
-		xpcc::delayMilliseconds(10);
-	}
 
 
 	while (1) {
+		LedDown::toggle();
+
 		ledsToTimerValues(leds, timerValues, numLeds);
 
-		LedDown::toggle();
+		DMA1->IFCR = 0b0000011100000000; // Reset HTIF3, TCIF3 and GIF3
+		Dma1::Stream3::configure(numDmaTransactions-1, Dma1::Stream3::Priority::VeryHigh, Dma1::Stream3::CircularMode::Disabled);
+		Dma1::Stream3::setPeripheralDestination(reinterpret_cast<uint16_t*>(const_cast<uint32_t*>(&(TIM2->CCR2))));
+		Dma1::Stream3::setMemorySource(static_cast<uint16_t*>(timerValues+1));
+
+		Timer2::setCompareValue(2, timerValues[0]);
+		Timer2::applyAndReset();
+
+		XPCC_LOG_INFO << "!!!! DMA stream3 restart !!!!" << xpcc::endl;
+
+		XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
+		XPCC_LOG_INFO << "DMA1->ISR=" << isr() << xpcc::endl;
 
 		Dma1::Stream3::start();
 		Timer2::start();
 
 
 		while (!Dma1::Stream3::isFinished()) {
+			//XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
+			XPCC_LOG_INFO << "TIM2->CCR2=" << tim2_ccr2() << xpcc::endl;
 			LedRight::toggle();
-			xpcc::delayMilliseconds(1);
 		}
+		XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
+		XPCC_LOG_INFO << "DMA1->ISR=" << isr() << xpcc::endl;
+		XPCC_LOG_INFO << "!!!! DMA stream3 finished !!!!" << xpcc::endl;
 
 		Timer2::pause();
 		Dma1::Stream3::stop();
 
-		xpcc::delayMilliseconds(100);
+		XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
+		XPCC_LOG_INFO << "DMA1->ISR=" << isr() << xpcc::endl;
+
+		xpcc::delayMilliseconds(50);
 	}
 }
 
@@ -163,5 +187,9 @@ void ledsToTimerValues(rgb_t* leds, uint16_t* timerValues, uint32_t numLeds) {
 	while (timerValuesIndex < numDmaTransactions) {
 		timerValues[timerValuesIndex++] = 0;
 	}
+	/*XPCC_LOG_INFO << "numDmaTransactions=" << numDmaTransactions << xpcc::endl;
+	for (uint16_t i = 0; i < numDmaTransactions; i++) {
+		XPCC_LOG_INFO << "compareValue=" << timerValues[i] << xpcc::endl;
+	}*/
 	XPCC_LOG_INFO << "ledsToTimerValues() end" << xpcc::endl;
 }
