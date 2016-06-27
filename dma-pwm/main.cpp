@@ -30,9 +30,9 @@ typedef struct {
 static constexpr uint8_t numLeds = 5;
 static constexpr uint16_t numDmaTransactions = numLeds * 3 * 8 + 50;
 
-rgb_t leds[numLeds];
+rgb_t* leds;
 
-uint16_t timerValues[numDmaTransactions];
+uint16_t* timerValues;
 
 
 /* Timer2::setPeriod(cast<integer>1.25, false); // 1.25µS needed
@@ -55,13 +55,13 @@ static constexpr Timer2::Value compareValue1 = overflow * (900.0 / 1250.0);
 void ledsToTimerValues(rgb_t* leds, uint16_t* timerValues, uint32_t numLeds);
 
 
-uint32_t isr() {
+inline uint32_t isr() {
 	return DMA1->ISR;
 }
-uint32_t cndtr() {
+inline uint32_t cndtr() {
 	return DMA1_Channel3->CNDTR;
 }
-uint32_t tim2_ccr2() {
+inline uint32_t tim2_ccr2() {
 	return TIM2->CCR2;
 }
 
@@ -76,6 +76,9 @@ main()
 	GpioOutputA9::connect(Usart1::Tx);
 	GpioInputA10::connect(Usart1::Rx, Gpio::InputType::PullUp);
 	Usart1::initialize<Board::systemClock, Usart1::B115200>(12);
+
+	leds = new (xpcc::MemoryDefault) rgb_t[numLeds];
+	timerValues = new (xpcc::MemoryDMA | xpcc::MemoryFastData) uint16_t[numDmaTransactions];
 
 	for (uint32_t i = 0; i < numLeds; i++) {
 		leds[i].r = 0b01010101;
@@ -99,10 +102,10 @@ main()
 	Timer2::setOverflow(overflow);
 	Timer2::setPrescaler(prescaler);
 	Timer2::configureOutputChannel(2, Timer2::OutputCompareMode::Pwm, 42);
-	Timer2::enableDmaRequest(Timer2::DmaRequestEnable::CaptureCompare2);
-	TIM2->CR1 |= TIM_CR1_ARPE; //  Auto-reload preload enable
-	TIM2->CCMR1 |= TIM_CCMR1_OC1PE; // Output compare 1 preload enable
-	Timer2::applyAndReset();
+	//Timer2::enableDmaRequest(Timer2::DmaRequestEnable::CaptureCompare2);
+	//TIM2->CR1 |= TIM_CR1_ARPE; //  Auto-reload preload enable
+	//TIM2->CCMR1 |= TIM_CCMR1_OC1PE; // Output compare 1 preload enable
+	//Timer2::applyAndReset();
 
 
 	XPCC_LOG_INFO << "TIM2->CR1=" << ((uint32_t)TIM2->CR1) << xpcc::endl;
@@ -116,15 +119,15 @@ main()
 
 
 	while (1) {
-		LedDown::toggle();
-
 		ledsToTimerValues(leds, timerValues, numLeds);
 
-		DMA1->IFCR = 0b0000011100000000; // Reset HTIF3, TCIF3 and GIF3
-		Dma1::Stream3::configure(numDmaTransactions-1, Dma1::Stream3::Priority::VeryHigh, Dma1::Stream3::CircularMode::Disabled);
+		//DMA1->IFCR = 0b0000011100000000; // Reset HTIF3, TCIF3 and GIF3
 		Dma1::Stream3::setPeripheralDestination(reinterpret_cast<uint16_t*>(const_cast<uint32_t*>(&(TIM2->CCR2))));
-		Dma1::Stream3::setMemorySource(static_cast<uint16_t*>(timerValues+1));
+		Dma1::Stream3::setMemorySource(static_cast<uint16_t*>(timerValues));
+		Dma1::Stream3::configure(numDmaTransactions-1, Dma1::Stream3::Priority::VeryHigh, Dma1::Stream3::CircularMode::Disabled);
+		Dma1::Stream3::start();
 
+		Timer2::enableDmaRequest(Timer2::DmaRequestEnable::CaptureCompare2);
 		Timer2::setCompareValue(2, timerValues[0]);
 		Timer2::applyAndReset();
 
@@ -133,13 +136,13 @@ main()
 		XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
 		XPCC_LOG_INFO << "DMA1->ISR=" << isr() << xpcc::endl;
 
-		Dma1::Stream3::start();
 		Timer2::start();
 
 
 		while (!Dma1::Stream3::isFinished()) {
 			//XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
-			XPCC_LOG_INFO << "TIM2->CCR2=" << tim2_ccr2() << xpcc::endl;
+			//XPCC_LOG_INFO << "TIM2->CCR2=" << tim2_ccr2() << xpcc::endl;
+			XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
 			LedRight::toggle();
 		}
 		XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
@@ -152,7 +155,8 @@ main()
 		XPCC_LOG_INFO << "DMA1->CNDTR=" << cndtr() << xpcc::endl;
 		XPCC_LOG_INFO << "DMA1->ISR=" << isr() << xpcc::endl;
 
-		xpcc::delayMilliseconds(50);
+		xpcc::delayMilliseconds(500);
+		LedDown::toggle();
 	}
 }
 
